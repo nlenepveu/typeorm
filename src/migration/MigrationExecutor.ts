@@ -136,27 +136,28 @@ export class MigrationExecutor {
 
         // start transaction if its not started yet
         let transactionStartedByUs = false;
-        if (this.transaction && !queryRunner.isTransactionActive) {
-            await queryRunner.startTransaction();
-            transactionStartedByUs = true;
-        }
 
         // run all pending migrations in a sequence
         try {
-            await PromiseUtils.runInSequence(pendingMigrations, migration => {
+            await PromiseUtils.runInSequence(pendingMigrations, async migration => {
+                if (this.transaction && !queryRunner.isTransactionActive) {
+                    await queryRunner.startTransaction();
+                    transactionStartedByUs = true;
+                }
+
                 return migration.instance!.up(queryRunner)
                     .then(() => { // now when migration is executed we need to insert record about it into the database
                         return this.insertExecutedMigration(queryRunner, migration);
                     })
-                    .then(() => { // informative log about migration success
+                    .then(async () => { // informative log about migration success
+                        // commit transaction if we started it
+                        if (transactionStartedByUs)
+                            await queryRunner.commitTransaction();
+
                         successMigrations.push(migration);
                         this.connection.logger.logSchemaBuild(`Migration ${migration.name} has been executed successfully.`);
                     });
             });
-
-            // commit transaction if we started it
-            if (transactionStartedByUs)
-                await queryRunner.commitTransaction();
 
         } catch (err) { // rollback transaction if we started it
             if (transactionStartedByUs) {
